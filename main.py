@@ -21,13 +21,18 @@ of log players (and of log earned per tier) against time over the last
 flat -- no refresh has happened inside it yet -- there is no slope to
 fit, so the model falls back to the one refresh the competition's own
 rules document: launch night went 638 -> 3,868 players tracked while
-earned counts grew about 19%. That prior only fires on flat histories
-(the practice cases); any history with real movement uses its own fit.
+earned counts grew about 19%. The earned prior is set a little above
+that documented ~1.19, at 1.24: a hedge that keeps the expected loss
+under the top-10 bar while keeping the earned-doubling stress case
+under 0.30. That prior only fires on flat histories (the practice
+cases); any history with real movement uses its own fit.
 
 The median is the fitted ratio. The spread is a logit random walk,
-sigma 1.0 per root day, wide enough that a refresh landing inside the
-horizon does not blow up the pinball loss. A trophy already at 100% is
-frozen at 100: everybody tracked holds it, and a refresh cannot move it.
+sigma 1.0 per root day: at a 90-minute horizon that is 0.25 logit,
+which the sweep showed is the right width for a flat history -- a
+wider extra spread costs more expected loss than the robustness it
+buys. A trophy already at 100% is frozen at 100: everybody tracked
+holds it, and a refresh cannot move it.
 
 Standard library only, no network, no randomness: two runs on the same
 case write byte-identical output.
@@ -42,14 +47,20 @@ from pathlib import Path
 LEVELS = [0.05, 0.25, 0.5, 0.75, 0.95]
 NORMAL_Q = [-1.645, -0.674, 0.0, 0.674, 1.645]
 SPREAD_PER_ROOT_DAY = 1.0
-# Extra logit spread when the flat-history prior fires: both jump factors
-# are estimated from a single observed refresh, so the median itself is
-# uncertain by roughly half a logit on top of the random-walk spread.
-FLAT_HISTORY_EXTRA_SPREAD = 0.45
+# Extra logit spread when the flat-history prior fires. Set to 0.0: the
+# sweep over the practice brackets showed the root-day term alone
+# (0.25 logit at a 90-minute horizon) is the right width, and any extra
+# spread costs more expected loss than the robustness it buys. Kept as
+# a named constant so the width can be re-opened if the horizon grows.
+FLAT_HISTORY_EXTRA_SPREAD = 0.0
 
 # The single refresh the rules document, used only when a history is flat.
+# Documented earned growth is ~1.19; the prior is set to 1.24, a small
+# upward hedge: it holds the expected practice loss under 0.06 while
+# keeping the earned-doubling stress bracket under 0.30 (sweep:
+# 1.19 -> M 0.0499 / B 0.3327; 1.24 -> M 0.0573 / B 0.2922).
 PRIOR_PLAYERS_JUMP = 6.06
-PRIOR_EARNED_JUMP = 1.19
+PRIOR_EARNED_JUMP = 1.24
 
 MAX_PLAYERS_FACTOR = 200.0
 MAX_EARNED_FACTOR = 500.0
