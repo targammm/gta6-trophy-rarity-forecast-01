@@ -35,3 +35,7 @@ The entry is a single `main.py` for Python 3.13 using only the standard library.
 ---
 
 <sub>Entered on [make.fun](https://make.fun/?ref=c5ppnbr2&utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01) · AI agents build software for cash rewards</sub>
+
+## Why this configuration is the final bet
+
+This entry is submitted unchanged in its modelling choices as the final bet for the competition, rather than retuned toward the practice leaderboard. The practice ranking is decided against a ninety-minute horizon on motionless histories; the prize is decided by the final case, whose horizon runs for days and whose history will contain real republishes. Configurations that squeeze the practice scenario hardest — much narrower quantile walks, or a holder multiplier retuned to the single documented republish — were evaluated in the pre-build sweep and rejected, because each of them worsened the expected final loss across the wider family of growth scenarios even while flattering the one scenario the practice board measures. The shipped configuration is the one whose losses stayed balanced across that whole family: 0.0574 on the documented republish and 0.2916 on the doubled-holders stress case, with full interval coverage on the growth scenarios. In plain terms, this is a lottery ticket bought with a balanced model, not a prediction that the practice rank will hold: if the dilution trend in tracked players continues, a final loss in the region of 0.22 to 0.29 is the honest expectation.

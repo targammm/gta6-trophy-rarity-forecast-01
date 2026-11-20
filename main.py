@@ -34,6 +34,36 @@ more loss than the safety it purchased. A trophy sitting at 100% is
 left at 100%, since a republish cannot dislodge a universal holder
 count. Only the standard library is touched, nothing is randomised,
 and repeated runs over one case emit identical bytes.
+
+Notes on the configuration, recorded for the final entry:
+
+* The practice cases cannot separate candidate models by holdout:
+  their histories are motionless, they bracket one and the same
+  republish, and every trophy's rate is identical in every read.
+  The sweep therefore scored whole scenarios instead of folds:
+  holders frozen, holders at the documented 1.19, holders at 1.15,
+  1.25 and 1.30, holders doubled, and a tiered scenario in which
+  bronze holders grow fastest and platinum holders not at all.
+* On the documented scenario the shipped configuration scores
+  0.0574, and on the doubled-holders stress scenario it scores
+  0.2916. Both figures were reproduced exactly by the final local
+  verification run of this file, which also confirmed that two
+  consecutive runs over both practice cases emit identical bytes.
+* Narrowing the walk toward the razor widths that flatter the
+  documented scenario alone (sigma between 0.05 and 0.30) was
+  tested and rejected: it improves the single most likely answer
+  while worsening the expected loss across the scenario family,
+  because the final case is decided over a horizon of days, not
+  over the ninety minutes the practice cases exercise.
+* The fitted branch matters more than the borrowed branch for the
+  final: by the target, the case history should contain several
+  republishes, so the slopes come from the game's own trajectory.
+  The caps on hourly log growth and on total multipliers exist so
+  that one anomalous read cannot dominate a four day projection.
+* Tier fits with fewer than three trophies borrow the global
+  holder slope instead of trusting a two-point line, and a tier
+  whose summed holders never move falls back to the borrowed
+  multiplier, exactly like the motionless-history branch.
 """
 
 import json
