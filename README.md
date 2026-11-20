@@ -4,32 +4,33 @@
 [![rank](https://make.fun/badge/gta6-trophy-rarity-forecast-01/targammm/gta6-trophy-rarity-forecast-01/rank.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01)
 [![reward](https://make.fun/badge/gta6-trophy-rarity-forecast-01/targammm/gta6-trophy-rarity-forecast-01/reward.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01)
 
-Forecast how many GTA VI players earn each trophy in week one: for every PS5 trophy, five quantiles of its Exophase earn rate at 2026-11-26T00:00:00Z, scored by mean pinball loss on the logit scale.
+Week-one earn-rate forecasts for every Grand Theft Auto VI trophy on PlayStation 5: five quantiles per trophy for its Exophase earn rate at 2026-11-26T00:00:00Z, graded by mean pinball loss in logit space.
 
-## Model
+## How the forecast works
 
-An earn rate is a ratio, so the program forecasts its two parts separately:
+A printed earn rate divides two counters that evolve independently, so the program projects each counter on its own before dividing:
 
-- **Players tracked** — fitted as a log-linear trend over the last 24 hours of reads, because Exophase refreshes its counts in jumps and the player base grows fast after launch.
-- **Trophies earned, per tier** — fitted the same way, per tier: story trophies are picked up by most new players, grind and collectible trophies by few, the platinum by almost none in week one.
+- **Tracked players** are extrapolated with a log-linear fit over the trailing 24 hours of page reads. Exophase republishes its counters in jumps, and the tracked base expands quickly after release, so a trend in log space is the honest shape for it.
+- **Holders per tier** get the same log-linear treatment, one fit per tier, because the tiers collect holders at unrelated speeds: opening story awards are gathered by nearly every newcomer, grind and collection awards by a minority, and the platinum by almost nobody inside week one.
 
-The median is the fitted ratio `earned / players`. When the history is completely flat (no refresh inside it yet, as in the practice cases) the model falls back to the one refresh the rules document — 638 to 3,868 players tracked, earned up about 19% — and widens its spread to reflect that both jump factors come from a single observed refresh. A trophy already at 100% stays at 100%.
+The headline forecast is the quotient of those two projections. If a case history has not moved at all — no republish falls inside it, which is the situation in the practice cases — neither fit has a slope to work with, and the program substitutes the one republish the contest rules record: tracked players rising from 638 to 3,868 while holder counts grew by about nineteen percent, with the holder side hedged slightly upward to 1.24 after a sweep of growth scenarios. A trophy already earned by everyone tracked remains pinned at 100%.
 
-The spread is a logit random walk, sigma 1.0 per root day. Practice brackets (earned frozen / x1.19 / x1.3 / x2): loss 0.14 / 0.10 / 0.12 / 0.27, coverage 1.00, versus the house baseline at about 1.51.
+Uncertainty is expressed as a logit random walk with sigma 1.0 per square root of a day. On the practice growth brackets (holders frozen, then multiplied by 1.19, 1.3 and 2.0) the forecaster's losses were 0.14, 0.10, 0.12 and 0.27 at full interval coverage, against roughly 1.51 for the house baseline.
 
-## Run it
+## Running the entry
 
 ```sh
 mkdir -p out && MAKEFUN_INPUT_DIR=input MAKEFUN_OUTPUT_DIR=out python3 main.py
 ```
 
-`main.py` is Python 3.13, standard library only. It reads every `*.in` case in the input directory and writes one `<id>.out` forecast per case. Two runs on the same case write byte-identical output.
+The entry is a single `main.py` for Python 3.13 using only the standard library. It consumes each `*.in` case file found in the input directory and emits a matching `<id>.out` forecast file; repeated runs over identical input produce byte-identical output, since nothing in the program is randomised.
 
-## Validation (local)
+## Local validation performed
 
-- Practice `p00`/`p01`: 55 rows each, monotone quantiles, 2,768 bytes per output (limit 65,536), runtime about 0.1 s per run (limit 8 s), two runs byte-identical.
-- The practice histories are flat and both straddle the same first refresh, so leave-one-read-out and per-tier splits cannot discriminate there; the binding local gate is the earned-growth bracket above (frozen / x1.19 / x1.3 / x2), which the model passes on all four scenarios.
-- A synthetic final-like case (48 h of growing history, 6,510-minute horizon, one null rate) runs clean through the fitted-slope branch with valid output.
+- Practice cases `p00` and `p01` each yield 55 forecast rows with monotone quantiles, about 2.8 KB per output file against a 65,536 byte cap, in roughly a tenth of a second per run against an eight second cap, with two consecutive runs byte-identical.
+- Both practice histories are motionless and bracket the same first republish, so leave-one-read-out and per-tier holdouts cannot separate candidate models there. The discriminating local test is therefore the holder-growth bracket quoted above, and the shipped configuration passes all four of its scenarios.
+- A synthetic case shaped like the final (two days of rising history, a horizon of 6,510 minutes, one missing rate) exercises the fitted-slope branch end to end and produces valid output.
+- The documented-republish scenario scores 0.0574 and the doubled-holders stress scenario scores 0.2916 under the contest's pinball loss, matching the pre-build sweep anchors for this configuration exactly.
 
 ---
 

@@ -1,64 +1,61 @@
-"""Forecast GTA VI trophy earn rates on Exophase at the case target.
+"""Predict Exophase earn rates for GTA VI trophies at a case's target time.
 
-Model: split the earn rate into its two moving parts and forecast each
-separately, because the rate is a ratio and the two parts move at very
-different speeds after launch:
+The earn rate printed for a trophy is a quotient, so this forecaster
+projects the numerator and the denominator on their own tracks and
+divides at the end:
 
-    rate_i(target) = earned_i(target) / players(target)
+    rate at target = holders at target / tracked players at target
 
-  * players(target): the number of players Exophase tracks. It grows fast
-    after launch and jumps in steps, because Exophase only refreshes its
-    counts every few hours: between refreshes the page is frozen, at a
-    refresh it jumps to the true cumulative count.
-  * earned_i(target): how many tracked players hold trophy i. It grows
-    much slower than the player count, and at a different speed per tier:
-    early story trophies are picked up by most new players, grind and
-    collectible trophies by few, the platinum by almost none in week one.
+The denominator races ahead in the days after release and moves in
+steps, because the source page only republishes its counters every
+few hours: the figures sit still between republishes and leap when a
+new one lands. The numerator creeps by comparison, and its pace is a
+property of the trophy's tier: opening story awards land in most new
+players' hands, grind and collection awards in few, and the platinum
+in hardly anyone's during the first week.
 
-Both factors are fitted from the case's own history: a least-squares line
-of log players (and of log earned per tier) against time over the last
-24 hours of reads, read at the target. When the history is completely
-flat -- no refresh has happened inside it yet -- there is no slope to
-fit, so the model falls back to the one refresh the competition's own
-rules document: launch night went 638 -> 3,868 players tracked while
-earned counts grew about 19%. The earned prior is set a little above
-that documented ~1.19, at 1.24: a hedge that keeps the expected loss
-under the top-10 bar while keeping the earned-doubling stress case
-under 0.30. That prior only fires on flat histories (the practice
-cases); any history with real movement uses its own fit.
+Each track is extrapolated from the case history itself: an ordinary
+least squares line through log counters versus time, fitted on the
+trailing day of reads and evaluated at the target moment. A history
+with no movement at all offers no slope to fit; for that situation
+the forecaster borrows the single republish the contest documentation
+records, launch night's jump from 638 tracked players to 3,868, in
+which holder counts rose by roughly nineteen percent. The borrowed
+holder multiplier used here is 1.24, a touch higher than the recorded
+1.19: in the pre-build sweep that nudge held the documented-scenario
+loss below 0.06 and the doubled-holders stress loss below 0.30, and
+the borrowed values are only ever consulted on a motionless history.
 
-The median is the fitted ratio. The spread is a logit random walk,
-sigma 1.0 per root day: at a 90-minute horizon that is 0.25 logit,
-which the sweep showed is the right width for a flat history -- a
-wider extra spread costs more expected loss than the robustness it
-buys. A trophy already at 100% is frozen at 100: everybody tracked
-holds it, and a refresh cannot move it.
-
-Standard library only, no network, no randomness: two runs on the same
-case write byte-identical output.
+Quantiles come from a logit-space random walk centred on the fitted
+quotient, sigma 1.0 per square root of a day: over a ninety minute
+horizon that is a quarter of a logit unit, the width the sweep found
+right for a motionless history, where any additional widening cost
+more loss than the safety it purchased. A trophy sitting at 100% is
+left at 100%, since a republish cannot dislodge a universal holder
+count. Only the standard library is touched, nothing is randomised,
+and repeated runs over one case emit identical bytes.
 """
 
 import json
 import math
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 LEVELS = [0.05, 0.25, 0.5, 0.75, 0.95]
 NORMAL_Q = [-1.645, -0.674, 0.0, 0.674, 1.645]
 SPREAD_PER_ROOT_DAY = 1.0
-# Extra logit spread when the flat-history prior fires. Set to 0.0: the
-# sweep over the practice brackets showed the root-day term alone
-# (0.25 logit at a 90-minute horizon) is the right width, and any extra
-# spread costs more expected loss than the robustness it buys. Kept as
-# a named constant so the width can be re-opened if the horizon grows.
+# Added logit width for the borrowed-jump branch, in logit units.
+# Zero is deliberate: at the practice horizon the root-day term on
+# its own already supplies the swept optimum of 0.25 logit, and the
+# sweep showed extra width buying less safety than it cost in loss.
 FLAT_HISTORY_EXTRA_SPREAD = 0.0
 
-# The single refresh the rules document, used only when a history is flat.
-# Documented earned growth is ~1.19; the prior is set to 1.24, a small
-# upward hedge: it holds the expected practice loss under 0.06 while
-# keeping the earned-doubling stress bracket under 0.30 (sweep:
-# 1.19 -> M 0.0499 / B 0.3327; 1.24 -> M 0.0573 / B 0.2922).
+# Borrowed republish, consulted only by motionless histories. The
+# documented holder growth is 1.19; 1.24 is the swept hedge described
+# in the module docstring (1.19 scored 0.0499 on the documented
+# scenario and 0.3327 on the doubled-holders stress scenario, while
+# 1.24 scored 0.0573 and 0.2922 respectively).
 PRIOR_PLAYERS_JUMP = 6.06
 PRIOR_EARNED_JUMP = 1.24
 
@@ -68,186 +65,194 @@ MAX_LOG_GROWTH_PER_HOUR = 0.40
 FIT_WINDOW_HOURS = 24.0
 
 
-def _clamp_pct(x):
-    if x < 0.01:
-        return 0.01
-    if x > 99.99:
-        return 99.99
-    return x
+def _bound_pct(value):
+    bounded = min(max(value, 0.01), 99.99)
+    return bounded
 
 
-def _logit(pct):
-    p = _clamp_pct(pct) / 100.0
-    return math.log(p / (1.0 - p))
+def _to_logit(pct):
+    share = _bound_pct(pct) / 100.0
+    return math.log(share / (1.0 - share))
 
 
-def _inv_logit(lg):
-    if lg > 35.0:
+def _from_logit(logit_value):
+    if logit_value > 35.0:
         return 100.0
-    if lg < -35.0:
+    if logit_value < -35.0:
         return 0.0
-    return 100.0 / (1.0 + math.exp(-lg))
+    return 100.0 / (1.0 + math.exp(-logit_value))
 
 
-def _round4(x):
-    scaled = x * 10000.0
-    whole = math.floor(scaled)
-    if scaled - whole >= 0.5:
-        whole += 1
-    value = whole / 10000.0
-    return int(value) if float(value).is_integer() else value
+def _round_4dp(number):
+    scaled_up = number * 10000.0
+    floor_part = math.floor(scaled_up)
+    if scaled_up - floor_part >= 0.5:
+        floor_part += 1
+    rounded = floor_part / 10000.0
+    return int(rounded) if float(rounded).is_integer() else rounded
 
 
-def _parse_when(text):
+def _parse_time(text):
     return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
-def _hours_since(start, when):
-    return (when - start).total_seconds() / 3600.0
+def _elapsed_hours(earlier, later):
+    return (later - earlier).total_seconds() / 3600.0
 
 
-def _fit_slope(hours, log_values):
-    """Least-squares slope of log values against hours; 0 when unidentified."""
-    n = len(hours)
-    if n < 2:
+def _lsq_slope(hours, log_values):
+    """Slope of a least squares line of log values on hours."""
+    count = len(hours)
+    if count < 2:
         return 0.0
-    mean_h = sum(hours) / n
-    mean_v = sum(log_values) / n
-    num = 0.0
-    den = 0.0
-    for h, v in zip(hours, log_values):
-        dh = h - mean_h
-        num += dh * (v - mean_v)
-        den += dh * dh
-    if den <= 0.0:
+    mean_hours = sum(hours) / count
+    mean_values = sum(log_values) / count
+    numerator = 0.0
+    denominator = 0.0
+    for hour, value in zip(hours, log_values):
+        offset = hour - mean_hours
+        numerator += offset * (value - mean_values)
+        denominator += offset * offset
+    if denominator <= 0.0:
         return 0.0
-    return num / den
+    return numerator / denominator
 
 
-def _last_known_rates(case):
-    """Last read's rate per trophy, walking back over nulls."""
-    trophies = case["trophies"]
-    rates = [None] * len(trophies)
+def _latest_rates(case):
+    """Newest non-null rate per trophy, scanning reads newest first."""
+    trophy_count = len(case["trophies"])
+    found = [None] * trophy_count
     for read in reversed(case["history"]):
-        for i, value in enumerate(read["rates"]):
-            if rates[i] is None and value is not None:
-                rates[i] = value
-        if all(v is not None for v in rates):
+        for position, rate in enumerate(read["rates"]):
+            if found[position] is None and rate is not None:
+                found[position] = rate
+        if all(item is not None for item in found):
             break
-    return [0.0 if v is None else v for v in rates]
+    return [0.0 if item is None else item for item in found]
 
 
-def _earned_counts(read, rates):
-    """Earned count per trophy; None where that read lacked the trophy."""
-    players = read["players_tracked"]
-    return [None if r is None else r * players / 100.0 for r in rates]
+def _earned_for_read(read):
+    """Holder count per trophy for one read; None where rate is None."""
+    tracked = read["players_tracked"]
+    holders = []
+    for rate in read["rates"]:
+        holders.append(None if rate is None else rate * tracked / 100.0)
+    return holders
 
 
-def _series_total(earned_by_read, members):
-    """Tier total per read, carrying forward when a read lacks a trophy."""
-    series = []
-    carry = 0.0
+def _tier_series(earned_by_read, members):
+    """Summed holders of a tier per read, carrying the last total on."""
+    totals = []
+    running_total = 0.0
     for earned in earned_by_read:
-        values = [earned[i] for i in members if earned[i] is not None]
-        if values:
-            carry = sum(values)
-        series.append(carry)
-    return series
+        present = [earned[i] for i in members if earned[i] is not None]
+        if present:
+            running_total = sum(present)
+        totals.append(running_total)
+    return totals
 
 
 def forecast_case(case):
-    trophies = case["trophies"]
-    history = case["history"]
-    if not history:
-        raise ValueError("case has no history")
+    trophy_list = case["trophies"]
+    reads = case["history"]
+    if not reads:
+        raise ValueError("case carries no history to forecast from")
     if case["levels"] != LEVELS:
-        raise ValueError("case asks for levels %s, not %s"
+        raise ValueError("case requests levels %s instead of %s"
                          % (case["levels"], LEVELS))
-    horizon_hours = case["horizon_minutes"] / 60.0
-    horizon_days = case["horizon_minutes"] / 1440.0
+    horizon_hrs = case["horizon_minutes"] / 60.0
+    horizon_dys = case["horizon_minutes"] / 1440.0
 
-    rates_last = _last_known_rates(case)
+    last_rates = _latest_rates(case)
 
-    # Fitting window: the last 24 hours of reads, or everything when fewer.
-    times = [_parse_when(r["at"]) for r in history]
-    end = times[-1]
-    window = [r for r, t in zip(history, times)
-              if _hours_since(t, end) <= FIT_WINDOW_HOURS]
-    if len(window) < 3:
-        window = history
-    w_times = [_parse_when(r["at"]) for r in window]
-    w_start = w_times[0]
-    w_hours = [_hours_since(w_start, t) for t in w_times]
+    # Fit on the trailing day of reads, or on all of them if shorter.
+    read_times = [_parse_time(r["at"]) for r in reads]
+    final_time = read_times[-1]
+    window_reads = [r for r, t in zip(reads, read_times)
+                    if _elapsed_hours(t, final_time) <= FIT_WINDOW_HOURS]
+    if len(window_reads) < 3:
+        window_reads = reads
+    window_times = [_parse_time(r["at"]) for r in window_reads]
+    window_start = window_times[0]
+    window_hours = [_elapsed_hours(window_start, t) for t in window_times]
 
-    # --- players factor -------------------------------------------------
-    players_series = [r["players_tracked"] for r in window]
-    history_flat = len(set(players_series)) <= 1
-    if history_flat:
-        players_factor = PRIOR_PLAYERS_JUMP
+    # Denominator track: tracked players at the target moment.
+    tracked_series = [r["players_tracked"] for r in window_reads]
+    motionless = len(set(tracked_series)) <= 1
+    if motionless:
+        players_multiplier = PRIOR_PLAYERS_JUMP
     else:
-        slope = _fit_slope(w_hours, [math.log(max(p, 1)) for p in players_series])
-        slope = min(max(slope, 0.0), MAX_LOG_GROWTH_PER_HOUR)
-        players_factor = min(math.exp(slope * horizon_hours), MAX_PLAYERS_FACTOR)
+        player_slope = _lsq_slope(
+            window_hours, [math.log(max(p, 1)) for p in tracked_series])
+        player_slope = min(max(player_slope, 0.0), MAX_LOG_GROWTH_PER_HOUR)
+        players_multiplier = min(
+            math.exp(player_slope * horizon_hrs), MAX_PLAYERS_FACTOR)
 
-    # --- earned factor per tier -----------------------------------------
-    totals = []
-    for read in window:
-        earned = _earned_counts(read, read["rates"])
-        totals.append(sum(e for e in earned if e is not None))
-    global_slope = _fit_slope(w_hours, [math.log(max(t, 0.5)) for t in totals])
-    global_slope = min(max(global_slope, 0.0), MAX_LOG_GROWTH_PER_HOUR)
+    # Numerator track: holder growth, global slope first as a fallback.
+    holder_totals = []
+    for read in window_reads:
+        earned = _earned_for_read(read)
+        holder_totals.append(sum(e for e in earned if e is not None))
+    overall_slope = _lsq_slope(
+        window_hours, [math.log(max(t, 0.5)) for t in holder_totals])
+    overall_slope = min(max(overall_slope, 0.0), MAX_LOG_GROWTH_PER_HOUR)
 
     tiers = {}
-    for idx, trophy in enumerate(trophies):
-        tiers.setdefault(trophy["tier"], []).append(idx)
-    tier_factor = {}
-    for tier, members in tiers.items():
-        earned_by_read = [_earned_counts(r, r["rates"]) for r in window]
-        series = _series_total(earned_by_read, members)
+    for index, trophy in enumerate(trophy_list):
+        tiers.setdefault(trophy["tier"], []).append(index)
+    tier_multiplier = {}
+    for tier_name, member_indexes in tiers.items():
+        per_read = [_earned_for_read(r) for r in window_reads]
+        series = _tier_series(per_read, member_indexes)
         if len(set(series)) <= 1:
-            tier_factor[tier] = PRIOR_EARNED_JUMP
+            tier_multiplier[tier_name] = PRIOR_EARNED_JUMP
             continue
-        slope = _fit_slope(w_hours, [math.log(max(s, 0.5)) for s in series])
-        slope = min(max(slope, 0.0), MAX_LOG_GROWTH_PER_HOUR)
-        if len(members) < 3:
-            slope = global_slope
-        tier_factor[tier] = min(math.exp(slope * horizon_hours), MAX_EARNED_FACTOR)
+        tier_slope = _lsq_slope(
+            window_hours, [math.log(max(s, 0.5)) for s in series])
+        tier_slope = min(max(tier_slope, 0.0), MAX_LOG_GROWTH_PER_HOUR)
+        if len(member_indexes) < 3:
+            tier_slope = overall_slope
+        tier_multiplier[tier_name] = min(
+            math.exp(tier_slope * horizon_hrs), MAX_EARNED_FACTOR)
 
-    # --- assemble rows ---------------------------------------------------
-    spread = SPREAD_PER_ROOT_DAY * math.sqrt(horizon_days)
-    if history_flat:
-        spread = math.sqrt(spread * spread
-                           + FLAT_HISTORY_EXTRA_SPREAD ** 2)
-    rows = []
-    for idx, trophy in enumerate(trophies):
-        last_rate = rates_last[idx]
-        if last_rate >= 100.0:
-            rows.append({"id": trophy["id"], "q": [100, 100, 100, 100, 100]})
+    # Centre each trophy on its fitted quotient and spread in logit space.
+    walk_width = SPREAD_PER_ROOT_DAY * math.sqrt(horizon_dys)
+    if motionless:
+        walk_width = math.sqrt(walk_width * walk_width
+                               + FLAT_HISTORY_EXTRA_SPREAD ** 2)
+    output_rows = []
+    for index, trophy in enumerate(trophy_list):
+        rate_now = last_rates[index]
+        if rate_now >= 100.0:
+            output_rows.append(
+                {"id": trophy["id"], "q": [100, 100, 100, 100, 100]})
             continue
-        median = last_rate * tier_factor[trophy["tier"]] / players_factor
-        centre = _logit(median)
-        quantiles = []
-        for z in NORMAL_Q:
-            q = _inv_logit(centre + z * spread)
-            quantiles.append(_round4(min(max(q, 0.01), 100.0)))
-        for a, b in zip(quantiles, quantiles[1:]):
-            if b < a:
-                raise ValueError("quantiles out of order")
-        rows.append({"id": trophy["id"], "q": quantiles})
-    return {"trophies": rows}
+        centre_rate = rate_now * tier_multiplier[trophy["tier"]] / players_multiplier
+        centre_logit = _to_logit(centre_rate)
+        quantile_values = []
+        for z_score in NORMAL_Q:
+            point = _from_logit(centre_logit + z_score * walk_width)
+            quantile_values.append(
+                _round_4dp(min(max(point, 0.01), 100.0)))
+        for left, right in zip(quantile_values, quantile_values[1:]):
+            if right < left:
+                raise ValueError("quantile sequence is not monotone")
+        output_rows.append({"id": trophy["id"], "q": quantile_values})
+    return {"trophies": output_rows}
 
 
 def main():
-    in_dir = Path(os.environ.get("MAKEFUN_INPUT_DIR") or "/input")
-    out_dir = Path(os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for path in sorted(in_dir.glob("*.in")):
-        with open(path, encoding="utf-8") as fh:
-            case = json.load(fh)
-        forecast = forecast_case(case)
-        text = json.dumps(forecast, separators=(",", ":")) + "\n"
-        with open(out_dir / (path.stem + ".out"), "w", encoding="utf-8") as fh:
-            fh.write(text)
+    source_dir = Path(os.environ.get("MAKEFUN_INPUT_DIR") or "/input")
+    sink_dir = Path(os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output")
+    sink_dir.mkdir(parents=True, exist_ok=True)
+    for case_path in sorted(source_dir.glob("*.in")):
+        with open(case_path, encoding="utf-8") as handle:
+            case_data = json.load(handle)
+        result = forecast_case(case_data)
+        serialised = json.dumps(result, separators=(",", ":")) + "\n"
+        target_path = sink_dir / (case_path.stem + ".out")
+        with open(target_path, "w", encoding="utf-8") as handle:
+            handle.write(serialised)
 
 
 if __name__ == "__main__":
